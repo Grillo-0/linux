@@ -9,6 +9,15 @@
 
 #include <drm/drm_rect.h>
 
+static void drm_rect_compare(struct kunit *test, const struct drm_rect *r,
+			     const struct drm_rect *expected)
+{
+	KUNIT_EXPECT_EQ(test, r->x1, expected->x1);
+	KUNIT_EXPECT_EQ(test, r->y1, expected->y1);
+	KUNIT_EXPECT_EQ(test, drm_rect_width(r), drm_rect_width(expected));
+	KUNIT_EXPECT_EQ(test, drm_rect_height(r), drm_rect_height(expected));
+}
+
 static void drm_test_rect_clip_scaled_div_by_zero(struct kunit *test)
 {
 	struct drm_rect src, dst, clip;
@@ -196,11 +205,32 @@ static void drm_test_rect_clip_scaled_signed_vs_unsigned(struct kunit *test)
 	KUNIT_EXPECT_FALSE_MSG(test, drm_rect_visible(&src), "Source should not be visible\n");
 }
 
+static void drm_test_rect_intersect(struct kunit *test)
+{
+	struct drm_rect r1, r2;
+	bool visible;
+
+	drm_rect_init(&r1, 0, 0, 2, 2);
+	drm_rect_init(&r2, 1, 1, 2, 2);
+
+	visible = drm_rect_intersect(&r1, &r2);
+
+	KUNIT_EXPECT_TRUE_MSG(test, visible, "Interserction should be a visible rect");
+	drm_rect_compare(test, &r1, &DRM_RECT_INIT(1, 1, 1, 1));
+
+	drm_rect_init(&r1, 0, 0, 1, 1);
+
+	visible = drm_rect_intersect(&r1, &r2);
+
+	KUNIT_EXPECT_FALSE_MSG(test, visible, "Interserction should not be a visible rect");
+}
+
 static struct kunit_case drm_rect_tests[] = {
 	KUNIT_CASE(drm_test_rect_clip_scaled_div_by_zero),
 	KUNIT_CASE(drm_test_rect_clip_scaled_not_clipped),
 	KUNIT_CASE(drm_test_rect_clip_scaled_clipped),
 	KUNIT_CASE(drm_test_rect_clip_scaled_signed_vs_unsigned),
+	KUNIT_CASE(drm_test_rect_intersect),
 	{ }
 };
 
