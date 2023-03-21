@@ -10,6 +10,7 @@
 #include <drm/drm_rect.h>
 
 #include <linux/string_helpers.h>
+#include <linux/errno.h>
 
 static void drm_rect_compare(struct kunit *test, const struct drm_rect *r,
 			     const struct drm_rect *expected)
@@ -334,12 +335,68 @@ static void drm_test_rect_intersect(struct kunit *test)
 	drm_rect_compare(test, &r1_aux, &params->expected_intersection);
 }
 
+static void drm_test_rect_calc_hscale(struct kunit *test)
+{
+	struct drm_rect src, dst;
+	int scaling_factor;
+
+	drm_rect_init(&src, 0, 0, 2, 0);
+	drm_rect_init(&dst, 0, 0, 1, 0);
+
+	scaling_factor =  drm_rect_calc_hscale(&src, &dst, INT_MIN, INT_MAX);
+
+	KUNIT_EXPECT_EQ(test, scaling_factor, 2);
+}
+
+static void drm_test_rect_calc_hscale_out_of_range(struct kunit *test)
+{
+	struct drm_rect src, dst;
+	int scaling_factor;
+
+	drm_rect_init(&src, 0, 0, 10, 0);
+	drm_rect_init(&dst, 0, 0, 1, 0);
+
+	scaling_factor =  drm_rect_calc_hscale(&src, &dst, 3, 5);
+
+	KUNIT_EXPECT_EQ(test, scaling_factor, -ERANGE);
+
+	drm_rect_init(&src, 0, 0, 2, 0);
+	drm_rect_init(&dst, 0, 0, 1, 0);
+
+	scaling_factor =  drm_rect_calc_hscale(&src, &dst, 3, 5);
+
+	KUNIT_EXPECT_EQ(test, scaling_factor, -ERANGE);
+}
+
+static void drm_test_rect_calc_hscale_negative_args(struct kunit *test)
+{
+	struct drm_rect src, dst;
+	int scaling_factor;
+
+	drm_rect_init(&src, 0, 0, -1, 0);
+	drm_rect_init(&dst, 0, 0, 1, 0);
+
+	scaling_factor = drm_rect_calc_hscale(&src, &dst, INT_MIN, INT_MAX);
+
+	KUNIT_EXPECT_EQ(test, scaling_factor, -EINVAL);
+
+	drm_rect_init(&src, 0, 0, 1, 0);
+	drm_rect_init(&dst, 0, 0, -1, 0);
+
+	scaling_factor = drm_rect_calc_hscale(&src, &dst, INT_MIN, INT_MAX);
+
+	KUNIT_EXPECT_EQ(test, scaling_factor, -EINVAL);
+}
+
 static struct kunit_case drm_rect_tests[] = {
 	KUNIT_CASE(drm_test_rect_clip_scaled_div_by_zero),
 	KUNIT_CASE(drm_test_rect_clip_scaled_not_clipped),
 	KUNIT_CASE(drm_test_rect_clip_scaled_clipped),
 	KUNIT_CASE(drm_test_rect_clip_scaled_signed_vs_unsigned),
 	KUNIT_CASE_PARAM(drm_test_rect_intersect, drm_rect_intersect_gen_params),
+	KUNIT_CASE(drm_test_rect_calc_hscale),
+	KUNIT_CASE(drm_test_rect_calc_hscale_out_of_range),
+	KUNIT_CASE(drm_test_rect_calc_hscale_negative_args),
 	{ }
 };
 
