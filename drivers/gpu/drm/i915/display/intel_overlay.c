@@ -966,9 +966,8 @@ static int check_overlay_dst(struct intel_overlay *overlay,
 		      rec->dst_width, rec->dst_height);
 
 	clipped = req;
-	drm_rect_intersect(&clipped, &crtc_state->pipe_src);
 
-	if (!drm_rect_visible(&clipped) ||
+	if (!drm_rect_intersect(&clipped, &crtc_state->pipe_src) ||
 	    !drm_rect_equals(&clipped, &req))
 		return -EINVAL;
 
