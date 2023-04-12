@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 
+#include "vkms_drv.h"
 #include <linux/kernel.h>
 #include <linux/minmax.h>
 
@@ -9,12 +10,12 @@
 
 #include "vkms_formats.h"
 
-static size_t pixel_offset(const struct vkms_frame_info *frame_info, int x, int y)
+static size_t pixel_offset(const struct vkms_frame_info *frame_info, int x, int y, size_t index)
 {
 	struct drm_framebuffer* fb = frame_info->fb;
 
-	return fb->offsets[0] + (y * fb->pitches[0])
-			      + (x * fb->format->cpp[0]);
+	return fb->offsets[index] + (y * fb->pitches[index])
+				  + (x * fb->format->cpp[index]);
 }
 
 /*
@@ -23,27 +24,25 @@ static size_t pixel_offset(const struct vkms_frame_info *frame_info, int x, int 
  * @frame_info: Buffer metadata
  * @x: The x(width) coordinate of the 2D buffer
  * @y: The y(Heigth) coordinate of the 2D buffer
+ * @index: The index of the plane on the 2D buffer
  *
  * Takes the information stored in the frame_info, a pair of coordinates, and
- * returns the address of the first color channel.
- * This function assumes the channels are packed together, i.e. a color channel
- * comes immediately after another in the memory. And therefore, this function
- * doesn't work for YUV with chroma subsampling (e.g. YUV420 and NV21).
+ * returns the address of the first color channel on the desired index.
  */
 static void *packed_pixels_addr(const struct vkms_frame_info *frame_info,
-				int x, int y)
+				int x, int y, size_t index)
 {
-	size_t offset = pixel_offset(frame_info, x, y);
+	size_t offset = pixel_offset(frame_info, x, y, index);
 
 	return (u8 *)frame_info->map[0].vaddr + offset;
 }
 
-static void *get_packed_src_addr(const struct vkms_frame_info *frame_info, int y)
+static void *get_packed_src_addr(const struct vkms_frame_info *frame_info, int y, size_t index)
 {
 	int x_src = frame_info->src.x1 >> 16;
 	int y_src = y - frame_info->rotated.y1 + (frame_info->src.y1 >> 16);
 
-	return packed_pixels_addr(frame_info, x_src, y_src);
+	return packed_pixels_addr(frame_info, x_src, y_src, index);
 }
 
 static int get_x_position(const struct vkms_frame_info *frame_info, int limit, int x)
@@ -53,7 +52,7 @@ static int get_x_position(const struct vkms_frame_info *frame_info, int limit, i
 	return x;
 }
 
-static void ARGB8888_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_pixel)
+static void ARGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
 {
 	/*
 	 * The 257 is the "conversion ratio". This number is obtained by the
@@ -61,23 +60,23 @@ static void ARGB8888_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_pixe
 	 * the best color value in a pixel format with more possibilities.
 	 * A similar idea applies to others RGB color conversions.
 	 */
-	out_pixel->a = (u16)src_pixels[3] * 257;
-	out_pixel->r = (u16)src_pixels[2] * 257;
-	out_pixel->g = (u16)src_pixels[1] * 257;
-	out_pixel->b = (u16)src_pixels[0] * 257;
+	out_pixel->a = (u16)src_pixels[0][3] * 257;
+	out_pixel->r = (u16)src_pixels[0][2] * 257;
+	out_pixel->g = (u16)src_pixels[0][1] * 257;
+	out_pixel->b = (u16)src_pixels[0][0] * 257;
 }
 
-static void XRGB8888_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_pixel)
+static void XRGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
 {
 	out_pixel->a = (u16)0xffff;
-	out_pixel->r = (u16)src_pixels[2] * 257;
-	out_pixel->g = (u16)src_pixels[1] * 257;
-	out_pixel->b = (u16)src_pixels[0] * 257;
+	out_pixel->r = (u16)src_pixels[0][2] * 257;
+	out_pixel->g = (u16)src_pixels[0][1] * 257;
+	out_pixel->b = (u16)src_pixels[0][0] * 257;
 }
 
-static void ARGB16161616_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_pixel)
+static void ARGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
 {
-	u16 *pixels = (u16 *)src_pixels;
+	u16 *pixels = (u16 *)src_pixels[0];
 
 	out_pixel->a = le16_to_cpu(pixels[3]);
 	out_pixel->r = le16_to_cpu(pixels[2]);
@@ -85,9 +84,9 @@ static void ARGB16161616_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_
 	out_pixel->b = le16_to_cpu(pixels[0]);
 }
 
-static void XRGB16161616_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_pixel)
+static void XRGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
 {
-	u16 *pixels = (u16 *)src_pixels;
+	u16 *pixels = (u16 *)src_pixels[0];
 
 	out_pixel->a = (u16)0xffff;
 	out_pixel->r = le16_to_cpu(pixels[2]);
@@ -95,9 +94,9 @@ static void XRGB16161616_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_
 	out_pixel->b = le16_to_cpu(pixels[0]);
 }
 
-static void RGB565_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_pixel)
+static void RGB565_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
 {
-	u16 *pixels = (u16 *)src_pixels;
+	u16 *pixels = (u16 *)src_pixels[0];
 
 	s64 fp_rb_ratio = drm_fixp_div(drm_int2fixp(65535), drm_int2fixp(31));
 	s64 fp_g_ratio = drm_fixp_div(drm_int2fixp(65535), drm_int2fixp(63));
@@ -113,21 +112,38 @@ static void RGB565_to_argb_u16(u8 *src_pixels, struct pixel_argb_u16 *out_pixel)
 	out_pixel->b = drm_fixp2int_round(drm_fixp_mul(fp_b, fp_rb_ratio));
 }
 
+static void get_src_pixels_per_plane(const struct vkms_frame_info* frame_info, u8** src_pixels, size_t y) {
+	const struct drm_format_info* frame_format = frame_info->fb->format;
+
+	for(size_t i = 0; i < frame_format->num_planes; i++) {
+		src_pixels[i] = get_packed_src_addr(frame_info, y, i);
+	}
+}
+
 void vkms_compose_row(struct line_buffer *stage_buffer, struct vkms_plane_state *plane, int y)
 {
 	struct pixel_argb_u16 *out_pixels = stage_buffer->pixels;
 	struct vkms_frame_info *frame_info = plane->frame_info;
-	u8 *src_pixels = get_packed_src_addr(frame_info, y);
+	const struct drm_format_info* frame_format = frame_info->fb->format;
 	int limit = min_t(size_t, drm_rect_width(&frame_info->dst), stage_buffer->n_pixels);
+	u8* src_pixels[DRM_FORMAT_MAX_PLANES];
 
-	for (size_t x = 0; x < limit; x++, src_pixels += frame_info->fb->format->cpp[0]) {
+	get_src_pixels_per_plane(frame_info, src_pixels, y);
+
+	for (size_t x = 0; x < limit; x++) {
 		int x_pos = get_x_position(frame_info, limit, x);
 
-		if (drm_rotation_90_or_270(frame_info->rotation))
-			src_pixels = get_packed_src_addr(frame_info, x + frame_info->rotated.y1)
-				+ frame_info->fb->format->cpp[0] * y;
+		if (drm_rotation_90_or_270(frame_info->rotation)) {
+			for(size_t i = 0; i < frame_format->num_planes; i++) {
+				src_pixels[i] = get_packed_src_addr(frame_info, x + frame_info->rotated.y1, i) + frame_format->cpp[i] * y;
+			}
+		}
 
 		plane->pixel_read(src_pixels, &out_pixels[x_pos]);
+
+		for(size_t i = 0; i < frame_format->num_planes; i++) {
+			src_pixels[i] += frame_format->cpp[i];
+		}
 	}
 }
 
@@ -143,7 +159,7 @@ static void argb_u16_to_ARGB8888(struct vkms_frame_info *frame_info,
 				 const struct line_buffer *src_buffer, int y)
 {
 	int x_dst = frame_info->dst.x1;
-	u8 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y);
+	u8 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y, 0);
 	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
 	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
 			    src_buffer->n_pixels);
@@ -170,7 +186,7 @@ static void argb_u16_to_XRGB8888(struct vkms_frame_info *frame_info,
 				 const struct line_buffer *src_buffer, int y)
 {
 	int x_dst = frame_info->dst.x1;
-	u8 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y);
+	u8 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y, 0);
 	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
 	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
 			    src_buffer->n_pixels);
@@ -187,7 +203,7 @@ static void argb_u16_to_ARGB16161616(struct vkms_frame_info *frame_info,
 				     const struct line_buffer *src_buffer, int y)
 {
 	int x_dst = frame_info->dst.x1;
-	u16 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y);
+	u16 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y, 0);
 	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
 	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
 			    src_buffer->n_pixels);
@@ -204,7 +220,7 @@ static void argb_u16_to_XRGB16161616(struct vkms_frame_info *frame_info,
 				     const struct line_buffer *src_buffer, int y)
 {
 	int x_dst = frame_info->dst.x1;
-	u16 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y);
+	u16 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y, 0);
 	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
 	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
 			    src_buffer->n_pixels);
@@ -221,7 +237,7 @@ static void argb_u16_to_RGB565(struct vkms_frame_info *frame_info,
 			       const struct line_buffer *src_buffer, int y)
 {
 	int x_dst = frame_info->dst.x1;
-	u16 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y);
+	u16 *dst_pixels = packed_pixels_addr(frame_info, x_dst, y, 0);
 	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
 	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
 			    src_buffer->n_pixels);
