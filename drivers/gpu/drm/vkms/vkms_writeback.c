@@ -142,9 +142,6 @@ static void vkms_wb_atomic_commit(struct drm_connector *conn,
 
 	spin_lock_irq(&output->composer_lock);
 	crtc_state->active_writeback = active_wb;
-	wb_frame_info->offset = fb->offsets[0];
-	wb_frame_info->pitch = fb->pitches[0];
-	wb_frame_info->cpp = fb->format->cpp[0];
 	crtc_state->wb_pending = true;
 	spin_unlock_irq(&output->composer_lock);
 	drm_writeback_queue_job(wb_conn, connector_state);
