@@ -32,6 +32,7 @@ static size_t pixel_offset(const struct vkms_frame_info *frame_info, int x, int 
 static void *packed_pixels_addr(const struct vkms_frame_info *frame_info,
 				int x, int y, size_t index)
 {
+
 	size_t offset = pixel_offset(frame_info, x, y, index);
 
 	return (u8 *)frame_info->map[0].vaddr + offset;
@@ -111,6 +112,12 @@ static void RGB565_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel
 	out_pixel->g = drm_fixp2int_round(drm_fixp_mul(fp_g, fp_g_ratio));
 	out_pixel->b = drm_fixp2int_round(drm_fixp_mul(fp_b, fp_rb_ratio));
 }
+
+static void XRGB8888_A8_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
+{
+	src_pixels[0][3] = src_pixels[1][0];
+	ARGB8888_to_argb_u16(src_pixels, out_pixel);
+};
 
 static void get_src_pixels_per_plane(const struct vkms_frame_info* frame_info, u8** src_pixels, size_t y) {
 	const struct drm_format_info* frame_format = frame_info->fb->format;
@@ -271,6 +278,8 @@ void *get_pixel_conversion_function(u32 format)
 		return &XRGB16161616_to_argb_u16;
 	case DRM_FORMAT_RGB565:
 		return &RGB565_to_argb_u16;
+	case DRM_FORMAT_XRGB8888_A8:
+		return &XRGB8888_A8_to_argb_u16;
 	default:
 		return NULL;
 	}
