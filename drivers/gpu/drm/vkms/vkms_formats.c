@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include "vkms_drv.h"
+#include "drm/drm_color_mgmt.h"
 #include <linux/kernel.h>
 #include <linux/minmax.h>
 
@@ -52,7 +53,8 @@ static int get_x_position(const struct vkms_frame_info *frame_info, int limit, i
 	return x;
 }
 
-static void ARGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
+static void ARGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+				 enum drm_color_encoding encoding, enum drm_color_range range)
 {
 	/*
 	 * The 257 is the "conversion ratio". This number is obtained by the
@@ -66,7 +68,8 @@ static void ARGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pix
 	out_pixel->b = (u16)src_pixels[0][0] * 257;
 }
 
-static void XRGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
+static void XRGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+				 enum drm_color_encoding encoding, enum drm_color_range range)
 {
 	out_pixel->a = (u16)0xffff;
 	out_pixel->r = (u16)src_pixels[0][2] * 257;
@@ -74,7 +77,8 @@ static void XRGB8888_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pix
 	out_pixel->b = (u16)src_pixels[0][0] * 257;
 }
 
-static void ARGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
+static void ARGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+				     enum drm_color_encoding encoding, enum drm_color_range range)
 {
 	u16 *pixels = (u16 *)src_pixels[0];
 
@@ -84,7 +88,8 @@ static void ARGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out
 	out_pixel->b = le16_to_cpu(pixels[0]);
 }
 
-static void XRGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
+static void XRGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+				     enum drm_color_encoding encoding, enum drm_color_range range)
 {
 	u16 *pixels = (u16 *)src_pixels[0];
 
@@ -94,7 +99,8 @@ static void XRGB16161616_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out
 	out_pixel->b = le16_to_cpu(pixels[0]);
 }
 
-static void RGB565_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel)
+static void RGB565_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+			       enum drm_color_encoding encoding, enum drm_color_range range)
 {
 	u16 *pixels = (u16 *)src_pixels[0];
 
@@ -143,6 +149,9 @@ void vkms_compose_row(struct line_buffer *stage_buffer, struct vkms_plane_state 
 	int limit = min_t(size_t, drm_rect_width(&frame_info->dst), stage_buffer->n_pixels);
 	u8 *src_pixels[DRM_FORMAT_MAX_PLANES];
 
+	enum drm_color_encoding encoding = plane->base.base.color_encoding;
+	enum drm_color_range range = plane->base.base.color_range;
+
 	get_src_pixels_per_plane(frame_info, src_pixels, y);
 
 	for (size_t x = 0; x < limit; x++) {
@@ -155,7 +164,7 @@ void vkms_compose_row(struct line_buffer *stage_buffer, struct vkms_plane_state 
 								    frame_format->cpp[i] * y;
 		}
 
-		plane->pixel_read(src_pixels, &out_pixels[x_pos]);
+		plane->pixel_read(src_pixels, &out_pixels[x_pos], encoding, range);
 
 		for (size_t i = 0; i < frame_format->num_planes; i++)
 			src_pixels[i] += frame_format->cpp[i];
