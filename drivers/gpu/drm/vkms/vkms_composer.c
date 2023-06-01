@@ -6,6 +6,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
 #include <drm/drm_fourcc.h>
+#include <drm/drm_fixed.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_vblank.h>
 #include <linux/minmax.h>
@@ -89,6 +90,100 @@ static void fill_background(const struct pixel_argb_u16 *background_color,
 		output_buffer->pixels[i] = *background_color;
 }
 
+// lerp(a, b, t) = a + (b - a) * t
+static u16 lerp_u16(u16 a, u16 b, s64 t)
+{
+	s64 a_fp = drm_int2fixp(a);
+	s64 b_fp = drm_int2fixp(b);
+
+	s64 ratio = drm_fixp_mul(b_fp - a_fp,  t);
+
+	return drm_fixp2int(a_fp + ratio);
+}
+
+static s64 get_lut_index(u16 color_channel, size_t lut_length)
+{
+	const s64 max_lut_index_fp = drm_int2fixp(lut_length  - 1);
+	const s64 u16_max_fp = drm_int2fixp(0xffff);
+
+	s64 ratio = drm_fixp_div(max_lut_index_fp, u16_max_fp);
+
+	s64 color_channel_fp = drm_int2fixp(color_channel);
+
+	return drm_fixp_mul(color_channel_fp, ratio);
+}
+
+enum lut_area {
+	LUT_RED,
+	LUT_GREEN,
+	LUT_BLUE,
+	LUT_RESERVED
+};
+
+static void apply_lut_to_color_channel(u16 *color_channel, enum lut_area area,
+				       struct drm_color_lut *lut, size_t lut_length)
+{
+	s64 ratio;
+
+	s64 lut_index = get_lut_index(*color_channel, lut_length);
+
+	size_t floor_index = drm_fixp2int(lut_index);
+	size_t ceil_index = drm_fixp2int_ceil(lut_index);
+
+	struct drm_color_lut floor_lut_value = lut[floor_index];
+	struct drm_color_lut ceil_lut_value = lut[ceil_index];
+
+	u16 floor_color_channel;
+	u16 ceil_color_channel;
+
+	switch (area) {
+	case LUT_RED:
+		floor_color_channel = floor_lut_value.red;
+		ceil_color_channel = ceil_lut_value.red;
+		break;
+	case LUT_GREEN:
+		floor_color_channel = floor_lut_value.green;
+		ceil_color_channel = ceil_lut_value.green;
+		break;
+	case LUT_BLUE:
+		floor_color_channel = floor_lut_value.blue;
+		ceil_color_channel = ceil_lut_value.blue;
+		break;
+	case LUT_RESERVED:
+		floor_color_channel = floor_lut_value.reserved;
+		ceil_color_channel = ceil_lut_value.reserved;
+		break;
+	}
+
+	ratio = lut_index - drm_int2fixp(floor_index);
+
+	*color_channel = lerp_u16(floor_color_channel, ceil_color_channel, ratio);
+}
+
+static void apply_lut(const struct vkms_crtc_state *crtc_state, struct line_buffer *output_buffer)
+{
+	struct drm_color_lut *lut;
+	size_t lut_length;
+
+	if (!crtc_state->base.gamma_lut)
+		return;
+
+	lut = (struct drm_color_lut *)crtc_state->base.gamma_lut->data;
+
+	lut_length = crtc_state->base.gamma_lut->length / sizeof(*lut);
+
+	if (!lut_length)
+		return;
+
+	for (size_t x = 0; x < output_buffer->n_pixels; x++) {
+		struct pixel_argb_u16 *pixel = &output_buffer->pixels[x];
+
+		apply_lut_to_color_channel(&pixel->r, LUT_RED, lut, lut_length);
+		apply_lut_to_color_channel(&pixel->g, LUT_GREEN, lut, lut_length);
+		apply_lut_to_color_channel(&pixel->b, LUT_BLUE, lut, lut_length);
+	}
+}
+
 /**
  * @wb_frame_info: The writeback frame buffer metadata
  * @crtc_state: The crtc state
@@ -127,6 +222,8 @@ static void blend(struct vkms_writeback_job *wb,
 			pre_mul_alpha_blend(plane[i]->frame_info, stage_buffer,
 					    output_buffer);
 		}
+
+		apply_lut(crtc_state, output_buffer);
 
 		*crc32 = crc32_le(*crc32, (void *)output_buffer->pixels, row_size);
 
