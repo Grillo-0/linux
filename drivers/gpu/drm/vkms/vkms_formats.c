@@ -119,6 +119,141 @@ static void RGB565_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel
 	out_pixel->b = drm_fixp2int_round(drm_fixp_mul(fp_b, fp_rb_ratio));
 }
 
+struct pixel_yuv_u8 {
+	u8 y, u, v;
+};
+
+static void ycbcr2rgb(const s16 m[3][3], u8 y, u8 cb, u8 cr, u8 y_offset, u8 *r, u8 *g, u8 *b)
+{
+	s32 y_16, cb_16, cr_16;
+	s32 r_16, g_16, b_16;
+
+	y_16 =  y - y_offset;
+	cb_16 = cb - 128;
+	cr_16 = cr - 128;
+
+	r_16 = m[0][0] * y_16 + m[0][1] * cb_16 + m[0][2] * cr_16;
+	g_16 = m[1][0] * y_16 + m[1][1] * cb_16 + m[1][2] * cr_16;
+	b_16 = m[2][0] * y_16 + m[2][1] * cb_16 + m[2][2] * cr_16;
+
+	*r = clamp(r_16, 0, 0xffff) >> 8;
+	*g = clamp(g_16, 0, 0xffff) >> 8;
+	*b = clamp(b_16, 0, 0xffff) >> 8;
+}
+
+static void yuv_u8_to_argb_u16(struct pixel_argb_u16 *argb_u16, const struct pixel_yuv_u8 *yuv_u8,
+			       enum drm_color_encoding encoding, enum drm_color_range range)
+{
+	static const s16 bt601_full[3][3] = {
+		{256,   0,  359},
+		{256, -88, -183},
+		{256, 454,    0},
+	};
+	static const s16 bt601[3][3] = {
+		{298,    0,  409},
+		{298, -100, -208},
+		{298,  516,    0},
+	};
+	static const s16 rec709_full[3][3] = {
+		{256,   0,  408},
+		{256, -48, -120},
+		{256, 476,   0 },
+	};
+	static const s16 rec709[3][3] = {
+		{298,   0,  459},
+		{298, -55, -136},
+		{298, 541,    0},
+	};
+	static const s16 bt2020_full[3][3] = {
+		{256,   0,  377},
+		{256, -42, -146},
+		{256, 482,    0},
+	};
+	static const s16 bt2020[3][3] = {
+		{298,   0,  430},
+		{298, -48, -167},
+		{298, 548,    0},
+	};
+
+	u8 r = 0;
+	u8 g = 0;
+	u8 b = 0;
+	bool full = range == DRM_COLOR_YCBCR_FULL_RANGE;
+	unsigned int y_offset = full ? 0 : 16;
+
+	switch (encoding) {
+	case DRM_COLOR_YCBCR_BT601:
+		ycbcr2rgb(full ? bt601_full : bt601,
+			  yuv_u8->y, yuv_u8->u, yuv_u8->v, y_offset, &r, &g, &b);
+		break;
+	case DRM_COLOR_YCBCR_BT709:
+		ycbcr2rgb(full ? rec709_full : rec709,
+			  yuv_u8->y, yuv_u8->u, yuv_u8->v, y_offset, &r, &g, &b);
+		break;
+	case DRM_COLOR_YCBCR_BT2020:
+		ycbcr2rgb(full ? bt2020_full : bt2020,
+			  yuv_u8->y, yuv_u8->u, yuv_u8->v, y_offset, &r, &g, &b);
+		break;
+	default:
+		pr_warn_once("Not supported color encoding\n");
+		break;
+	}
+
+	argb_u16->r = r * 257;
+	argb_u16->g = g * 257;
+	argb_u16->b = b * 257;
+}
+
+static void semi_planar_yuv_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+					enum drm_color_encoding encoding,
+					enum drm_color_range range)
+{
+	struct pixel_yuv_u8 yuv_u8;
+
+	yuv_u8.y = src_pixels[0][0];
+	yuv_u8.u = src_pixels[1][0];
+	yuv_u8.v = src_pixels[1][1];
+
+	yuv_u8_to_argb_u16(out_pixel, &yuv_u8, encoding, range);
+}
+
+static void semi_planar_yvu_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+					enum drm_color_encoding encoding,
+					enum drm_color_range range)
+{
+	struct pixel_yuv_u8 yuv_u8;
+
+	yuv_u8.y = src_pixels[0][0];
+	yuv_u8.v = src_pixels[1][0];
+	yuv_u8.u = src_pixels[1][1];
+
+	yuv_u8_to_argb_u16(out_pixel, &yuv_u8, encoding, range);
+}
+
+static void planar_yuv_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+				   enum drm_color_encoding encoding, enum drm_color_range range)
+{
+	struct pixel_yuv_u8 yuv_u8;
+
+	yuv_u8.y = src_pixels[0][0];
+	yuv_u8.u = src_pixels[1][0];
+	yuv_u8.v = src_pixels[2][0];
+
+	yuv_u8_to_argb_u16(out_pixel, &yuv_u8, encoding, range);
+}
+
+static void planar_yvu_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+				   enum drm_color_encoding encoding, enum drm_color_range range)
+{
+	struct pixel_yuv_u8 yuv_u8;
+
+	yuv_u8.y = src_pixels[0][0];
+	yuv_u8.v = src_pixels[1][0];
+	yuv_u8.u = src_pixels[2][0];
+
+	yuv_u8_to_argb_u16(out_pixel, &yuv_u8, encoding, range);
+}
+
 /**
  * vkms_compose_row - compose a single row of a plane
  * @stage_buffer: output line with the composed pixels
@@ -267,6 +402,22 @@ void *get_pixel_conversion_function(u32 format)
 		return &XRGB16161616_to_argb_u16;
 	case DRM_FORMAT_RGB565:
 		return &RGB565_to_argb_u16;
+	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_NV16:
+	case DRM_FORMAT_NV24:
+		return &semi_planar_yuv_to_argb_u16;
+	case DRM_FORMAT_NV21:
+	case DRM_FORMAT_NV61:
+	case DRM_FORMAT_NV42:
+		return &semi_planar_yvu_to_argb_u16;
+	case DRM_FORMAT_YUV420:
+	case DRM_FORMAT_YUV422:
+	case DRM_FORMAT_YUV444:
+		return &planar_yuv_to_argb_u16;
+	case DRM_FORMAT_YVU420:
+	case DRM_FORMAT_YVU422:
+	case DRM_FORMAT_YVU444:
+		return &planar_yvu_to_argb_u16;
 	default:
 		return NULL;
 	}
