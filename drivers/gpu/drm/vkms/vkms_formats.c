@@ -224,6 +224,13 @@ static void yuv_u8_to_argb_u16(struct pixel_argb_u16 *argb_u16, struct pixel_yuv
 static void NV12_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
 			     enum drm_color_encoding encoding, enum drm_color_range range)
 {
+	struct pixel_yuv_u8 yuv_u8;
+
+	yuv_u8.y = src_pixels[0][0];
+	yuv_u8.u = src_pixels[1][0];
+	yuv_u8.v = src_pixels[1][1];
+
+	yuv_u8_to_argb_u16(out_pixel, &yuv_u8, encoding, range);
 }
 
 static void get_src_pixels_per_plane(const struct vkms_frame_info *frame_info,
@@ -383,6 +390,20 @@ static void argb_u16_to_yuv_u8(struct pixel_yuv_u8 *yuv_u8, const struct pixel_a
 static void argb_u16_to_NV12(struct vkms_frame_info *frame_info,
 			     const struct line_buffer *src_buffer, int y)
 {
+	int x_dst = frame_info->dst.x1;
+	u8 *dst_y = packed_pixels_addr(frame_info, x_dst, y, 0);
+	u8 *dst_uv = packed_pixels_addr(frame_info, x_dst, y / 2, 1);
+	struct pixel_yuv_u8 yuv_u8;
+	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
+	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
+			    src_buffer->n_pixels);
+
+	for (size_t x = 0; x < x_limit; x++) {
+		argb_u16_to_yuv_u8(&yuv_u8, &in_pixels[x]);
+		dst_y[x] = yuv_u8.y;
+		dst_uv[x / 2 + x / 2] = yuv_u8.u;
+		dst_uv[x / 2 + x / 2 + 1] = yuv_u8.v;
+	}
 }
 
 void *get_pixel_conversion_function(u32 format)
@@ -398,6 +419,8 @@ void *get_pixel_conversion_function(u32 format)
 		return &XRGB16161616_to_argb_u16;
 	case DRM_FORMAT_RGB565:
 		return &RGB565_to_argb_u16;
+	case DRM_FORMAT_NV12:
+		return &NV12_to_argb_u16;
 	default:
 		return NULL;
 	}
@@ -416,6 +439,8 @@ void *get_pixel_write_function(u32 format)
 		return &argb_u16_to_XRGB16161616;
 	case DRM_FORMAT_RGB565:
 		return &argb_u16_to_RGB565;
+	case DRM_FORMAT_NV12:
+		return &argb_u16_to_NV12;
 	default:
 		return NULL;
 	}
