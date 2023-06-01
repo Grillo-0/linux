@@ -221,6 +221,11 @@ static void yuv_u8_to_argb_u16(struct pixel_argb_u16 *argb_u16, struct pixel_yuv
 	argb_u16->b = clamp(b, 0, 0xffff);
 }
 
+static void NV12_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
+			     enum drm_color_encoding encoding, enum drm_color_range range)
+{
+}
+
 static void get_src_pixels_per_plane(const struct vkms_frame_info *frame_info,
 				     u8 **src_pixels, size_t y)
 {
@@ -372,6 +377,12 @@ static void argb_u16_to_yuv_u8(struct pixel_yuv_u8 *yuv_u8, const struct pixel_a
 	yuv_u8->y = ((66 * r_u8  + 129 * g_u8 +  25 * b_u8 + 128) >> 8) +  16;
 	yuv_u8->u = ((-38 * r_u8 -  74 * g_u8 + 112 * b_u8 + 128) >> 8) + 128;
 	yuv_u8->v = ((112 * r_u8 -  94 * g_u8 -  18 * b_u8 + 128) >> 8) + 128;
+}
+
+
+static void argb_u16_to_NV12(struct vkms_frame_info *frame_info,
+			     const struct line_buffer *src_buffer, int y)
+{
 }
 
 void *get_pixel_conversion_function(u32 format)
