@@ -118,6 +118,109 @@ static void RGB565_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel
 	out_pixel->b = drm_fixp2int_round(drm_fixp_mul(fp_b, fp_rb_ratio));
 }
 
+struct pixel_yuv_u8 {
+	u8 y, u, v;
+};
+
+static void ycbcr2rgb(const s64 m[3][3], int y, int cb, int cr,
+		      int y_offset, int *r, int *g, int *b)
+{
+	s64 fp_y; s64 fp_cb; s64 fp_cr;
+	s64 fp_r; s64 fp_g; s64 fp_b;
+
+	y -= y_offset;
+	cb -= 128;
+	cr -= 128;
+
+	fp_y = drm_int2fixp(y);
+	fp_cb = drm_int2fixp(cb);
+	fp_cr = drm_int2fixp(cr);
+
+	fp_r = drm_fixp_mul(m[0][0], fp_y) +
+	       drm_fixp_mul(m[0][1], fp_cb) +
+	       drm_fixp_mul(m[0][2], fp_cr);
+
+	fp_g = drm_fixp_mul(m[1][0], fp_y) +
+	       drm_fixp_mul(m[1][1], fp_cb) +
+	       drm_fixp_mul(m[1][2], fp_cr);
+
+	fp_b = drm_fixp_mul(m[2][0], fp_y) +
+	       drm_fixp_mul(m[2][1], fp_cb) +
+	       drm_fixp_mul(m[2][2], fp_cr);
+
+	*r = drm_fixp2int(fp_r);
+	*g = drm_fixp2int(fp_g);
+	*b = drm_fixp2int(fp_b);
+}
+
+static void yuv_u8_to_argb_u16(struct pixel_argb_u16 *argb_u16, struct pixel_yuv_u8 *yuv_u8,
+			       enum drm_color_encoding encoding, enum drm_color_range range)
+{
+#define COEFF(v, r) (\
+	drm_fixp_div(drm_fixp_mul(drm_fixp_from_fraction(v, 10000), drm_int2fixp((1 << 16) - 1)),\
+		     drm_int2fixp(r)) \
+	)\
+
+	const s64 bt601[3][3] = {
+		{ COEFF(10000, 219), COEFF(0, 224),     COEFF(14020, 224) },
+		{ COEFF(10000, 219), COEFF(-3441, 224), COEFF(-7141, 224) },
+		{ COEFF(10000, 219), COEFF(17720, 224), COEFF(0, 224)     },
+	};
+	const s64 bt601_full[3][3] = {
+		{ COEFF(10000, 255), COEFF(0, 255),     COEFF(14020, 255) },
+		{ COEFF(10000, 255), COEFF(-3441, 255), COEFF(-7141, 255) },
+		{ COEFF(10000, 255), COEFF(17720, 255), COEFF(0, 255)     },
+	};
+	const s64 rec709[3][3] = {
+		{ COEFF(10000, 219), COEFF(0, 224),     COEFF(15748, 224) },
+		{ COEFF(10000, 219), COEFF(-1873, 224), COEFF(-4681, 224) },
+		{ COEFF(10000, 219), COEFF(18556, 224), COEFF(0, 224)     },
+	};
+	const s64 rec709_full[3][3] = {
+		{ COEFF(10000, 255), COEFF(0, 255),     COEFF(15748, 255) },
+		{ COEFF(10000, 255), COEFF(-1873, 255), COEFF(-4681, 255) },
+		{ COEFF(10000, 255), COEFF(18556, 255), COEFF(0, 255)     },
+	};
+	const s64 bt2020[3][3] = {
+		{ COEFF(10000, 219), COEFF(0, 224),     COEFF(14746, 224) },
+		{ COEFF(10000, 219), COEFF(-1646, 224), COEFF(-5714, 224) },
+		{ COEFF(10000, 219), COEFF(18814, 224), COEFF(0, 224)     },
+	};
+	const s64 bt2020_full[3][3] = {
+		{ COEFF(10000, 255), COEFF(0, 255),     COEFF(14746, 255) },
+		{ COEFF(10000, 255), COEFF(-1646, 255), COEFF(-5714, 255) },
+		{ COEFF(10000, 255), COEFF(18814, 255), COEFF(0, 255)     },
+	};
+
+	int r = 0;
+	int g = 0;
+	int b = 0;
+	bool full = range == DRM_COLOR_YCBCR_FULL_RANGE;
+	unsigned int y_offset = full ? 0 : 16;
+
+	switch (encoding) {
+	case DRM_COLOR_YCBCR_BT601:
+		ycbcr2rgb(full ? bt601_full : bt601,
+			  yuv_u8->y, yuv_u8->u, yuv_u8->v, y_offset, &r, &g, &b);
+		break;
+	case DRM_COLOR_YCBCR_BT709:
+		ycbcr2rgb(full ? rec709_full : rec709,
+			  yuv_u8->y, yuv_u8->u, yuv_u8->v, y_offset, &r, &g, &b);
+		break;
+	case DRM_COLOR_YCBCR_BT2020:
+		ycbcr2rgb(full ? bt2020_full : bt2020,
+			  yuv_u8->y, yuv_u8->u, yuv_u8->v, y_offset, &r, &g, &b);
+		break;
+	default:
+		pr_warn_once("Not supported color encoding\n");
+		break;
+	}
+
+	argb_u16->r = clamp(r, 0, 0xffff);
+	argb_u16->g = clamp(g, 0, 0xffff);
+	argb_u16->b = clamp(b, 0, 0xffff);
+}
+
 static void get_src_pixels_per_plane(const struct vkms_frame_info *frame_info,
 				     u8 **src_pixels, size_t y)
 {
@@ -254,6 +357,21 @@ void vkms_writeback_row(struct vkms_writeback_job *wb,
 
 	for (size_t x = 0; x < x_limit; x++, dst_pixels += frame_info->fb->format->cpp[0])
 		wb->pixel_write(dst_pixels, &in_pixels[x]);
+}
+
+/*
+ * The conversion was based on the article below:
+ * https://learn.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-rgb888-to-yuv-444
+ */
+static void argb_u16_to_yuv_u8(struct pixel_yuv_u8 *yuv_u8, const struct pixel_argb_u16 *argb_u16)
+{
+	u8 r_u8 = DIV_ROUND_CLOSEST(argb_u16->r, 257);
+	u8 g_u8 = DIV_ROUND_CLOSEST(argb_u16->g, 257);
+	u8 b_u8 = DIV_ROUND_CLOSEST(argb_u16->b, 257);
+
+	yuv_u8->y = ((66 * r_u8  + 129 * g_u8 +  25 * b_u8 + 128) >> 8) +  16;
+	yuv_u8->u = ((-38 * r_u8 -  74 * g_u8 + 112 * b_u8 + 128) >> 8) + 128;
+	yuv_u8->v = ((112 * r_u8 -  94 * g_u8 -  18 * b_u8 + 128) >> 8) + 128;
 }
 
 void *get_pixel_conversion_function(u32 format)
