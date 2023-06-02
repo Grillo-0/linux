@@ -89,6 +89,32 @@ static void fill_background(const struct pixel_argb_u16 *background_color,
 		output_buffer->pixels[i] = *background_color;
 }
 
+static void apply_lut(const struct vkms_crtc_state *crtc_state, struct line_buffer *output_buffer)
+{
+	struct drm_color_lut *lut;
+	size_t lut_length;
+
+	if (!crtc_state->base.gamma_lut)
+		return;
+
+	lut = (struct drm_color_lut *)crtc_state->base.gamma_lut->data;
+
+	lut_length = crtc_state->base.gamma_lut->length / sizeof(*lut);
+
+	if (!lut_length)
+		return;
+
+	for (size_t x = 0; x < output_buffer->n_pixels; x++) {
+		size_t lut_r_index = output_buffer->pixels[x].r * (lut_length - 1) / 0xffff;
+		size_t lut_g_index = output_buffer->pixels[x].g * (lut_length - 1) / 0xffff;
+		size_t lut_b_index = output_buffer->pixels[x].b * (lut_length - 1) / 0xffff;
+
+		output_buffer->pixels[x].r = lut[lut_r_index].red;
+		output_buffer->pixels[x].g = lut[lut_g_index].green;
+		output_buffer->pixels[x].b = lut[lut_b_index].blue;
+	}
+}
+
 /**
  * @wb_frame_info: The writeback frame buffer metadata
  * @crtc_state: The crtc state
@@ -127,6 +153,8 @@ static void blend(struct vkms_writeback_job *wb,
 			pre_mul_alpha_blend(plane[i]->frame_info, stage_buffer,
 					    output_buffer);
 		}
+
+		apply_lut(crtc_state, output_buffer);
 
 		*crc32 = crc32_le(*crc32, (void *)output_buffer->pixels, row_size);
 
