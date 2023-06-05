@@ -26,12 +26,15 @@ static size_t pixel_offset(const struct vkms_frame_info *frame_info, int x, int 
  * @index: The index of the plane on the 2D buffer
  *
  * Takes the information stored in the frame_info, a pair of coordinates, and
- * returns the address of the first color channel on the desired index.
+ * returns the address of the first color channel on the desired index. The
+ * format's specific subsample is applied.
  */
 static void *packed_pixels_addr(const struct vkms_frame_info *frame_info,
 				int x, int y, size_t index)
 {
-	size_t offset = pixel_offset(frame_info, x, y, index);
+	int vsub = index == 0 ? 1 : frame_info->fb->format->vsub;
+	int hsub = index == 0 ? 1 : frame_info->fb->format->hsub;
+	size_t offset = pixel_offset(frame_info, x / hsub, y / vsub, index);
 
 	return (u8 *)frame_info->map[0].vaddr + offset;
 }
@@ -146,18 +149,23 @@ void vkms_compose_row(struct line_buffer *stage_buffer, struct vkms_plane_state 
 	for (size_t x = 0; x < limit; x++) {
 		int x_pos = get_x_position(frame_info, limit, x);
 
+		bool shoud_inc = !((x + 1) % frame_format->num_planes);
+
 		if (drm_rotation_90_or_270(frame_info->rotation)) {
 			for (size_t i = 0; i < frame_format->num_planes; i++) {
 				src_pixels[i] = get_packed_src_addr(frame_info,
 								    x + frame_info->rotated.y1, i);
-				src_pixels[i] += frame_format->cpp[i] * y;
+				if (!i || shoud_inc)
+					src_pixels[i] += frame_format->cpp[i] * y;
 			}
 		}
 
 		plane->pixel_read(src_pixels, &out_pixels[x_pos], encoding, range);
 
-		for (size_t i = 0; i < frame_format->num_planes; i++)
-			src_pixels[i] += frame_format->cpp[i];
+		for (size_t i = 0; i < frame_format->num_planes; i++) {
+			if (!i || shoud_inc)
+				src_pixels[i] += frame_format->cpp[i];
+		}
 	}
 }
 
