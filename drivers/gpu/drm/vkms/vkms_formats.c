@@ -238,8 +238,10 @@ static void get_src_pixels_per_plane(const struct vkms_frame_info *frame_info,
 {
 	const struct drm_format_info *frame_format = frame_info->fb->format;
 
-	for (size_t i = 0; i < frame_format->num_planes; i++)
-		src_pixels[i] = get_packed_src_addr(frame_info, y, i);
+	for (size_t i = 0; i < frame_format->num_planes; i++){
+		int vsub = i ? frame_format->vsub : 1;
+		src_pixels[i] = get_packed_src_addr(frame_info, y / vsub, i);
+	}
 }
 
 
@@ -264,6 +266,8 @@ void vkms_compose_row(struct line_buffer *stage_buffer, struct vkms_plane_state 
 	int limit = min_t(size_t, drm_rect_width(&frame_info->dst), stage_buffer->n_pixels);
 	u8 *src_pixels[DRM_FORMAT_MAX_PLANES];
 
+	int hsub_count = 0;
+
 	enum drm_color_encoding encoding = plane->base.base.color_encoding;
 	enum drm_color_range range = plane->base.base.color_range;
 
@@ -272,17 +276,21 @@ void vkms_compose_row(struct line_buffer *stage_buffer, struct vkms_plane_state 
 	for (size_t x = 0; x < limit; x++) {
 		int x_pos = get_x_position(frame_info, limit, x);
 
+		hsub_count = (hsub_count + 1) % frame_format->hsub;
+
 		if (drm_rotation_90_or_270(frame_info->rotation)) {
+			get_src_pixels_per_plane(frame_info, src_pixels, x + frame_info->rotated.y1);
 			for (size_t i = 0; i < frame_format->num_planes; i++)
-				src_pixels[i] = get_packed_src_addr(frame_info,
-								    x + frame_info->rotated.y1, i) +
-								    frame_format->cpp[i] * y;
+				if (!i || !hsub_count)
+					src_pixels[i] += frame_format->cpp[i] * y;
 		}
 
 		plane->pixel_read(src_pixels, &out_pixels[x_pos], encoding, range);
 
-		for (size_t i = 0; i < frame_format->num_planes; i++)
-			src_pixels[i] += frame_format->cpp[i];
+		for (size_t i = 0; i < frame_format->num_planes; i++) {
+			if (!i || !hsub_count)
+				src_pixels[i] += frame_format->cpp[i];
+		}
 	}
 }
 
