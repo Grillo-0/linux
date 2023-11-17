@@ -122,79 +122,61 @@ struct pixel_yuv_u8 {
 	u8 y, u, v;
 };
 
-static void ycbcr2rgb(const s64 m[3][3], int y, int cb, int cr,
-		      int y_offset, int *r, int *g, int *b)
+static void ycbcr2rgb(const s16 m[3][3], u8 y, u8 cb, u8 cr, u8 y_offset, u8 *r, u8 *g, u8 *b)
 {
-	s64 fp_y; s64 fp_cb; s64 fp_cr;
-	s64 fp_r; s64 fp_g; s64 fp_b;
+	s32 y_16, cb_16, cr_16;
+	s32 r_16, g_16, b_16;
 
-	y -= y_offset;
-	cb -= 128;
-	cr -= 128;
+	y_16 =  y - y_offset;
+	cb_16 = cb - 128;
+	cr_16 = cr - 128;
 
-	fp_y = drm_int2fixp(y);
-	fp_cb = drm_int2fixp(cb);
-	fp_cr = drm_int2fixp(cr);
+	r_16 = m[0][0] * y_16 + m[0][1] * cb_16 + m[0][2] * cr_16;
+	g_16 = m[1][0] * y_16 + m[1][1] * cb_16 + m[1][2] * cr_16;
+	b_16 = m[2][0] * y_16 + m[2][1] * cb_16 + m[2][2] * cr_16;
 
-	fp_r = drm_fixp_mul(m[0][0], fp_y) +
-	       drm_fixp_mul(m[0][1], fp_cb) +
-	       drm_fixp_mul(m[0][2], fp_cr);
-
-	fp_g = drm_fixp_mul(m[1][0], fp_y) +
-	       drm_fixp_mul(m[1][1], fp_cb) +
-	       drm_fixp_mul(m[1][2], fp_cr);
-
-	fp_b = drm_fixp_mul(m[2][0], fp_y) +
-	       drm_fixp_mul(m[2][1], fp_cb) +
-	       drm_fixp_mul(m[2][2], fp_cr);
-
-	*r = drm_fixp2int(fp_r);
-	*g = drm_fixp2int(fp_g);
-	*b = drm_fixp2int(fp_b);
+	*r = clamp(r_16, 0, 0xffff) >> 8;
+	*g = clamp(g_16, 0, 0xffff) >> 8;
+	*b = clamp(b_16, 0, 0xffff) >> 8;
 }
 
-static void yuv_u8_to_argb_u16(struct pixel_argb_u16 *argb_u16, struct pixel_yuv_u8 *yuv_u8,
+static void yuv_u8_to_argb_u16(struct pixel_argb_u16 *argb_u16, const struct pixel_yuv_u8 *yuv_u8,
 			       enum drm_color_encoding encoding, enum drm_color_range range)
 {
-#define COEFF(v, r) (\
-	drm_fixp_div(drm_fixp_mul(drm_fixp_from_fraction(v, 10000), drm_int2fixp((1 << 16) - 1)),\
-		     drm_int2fixp(r)) \
-	)\
-
-	const s64 bt601[3][3] = {
-		{ COEFF(10000, 219), COEFF(0, 224),     COEFF(14020, 224) },
-		{ COEFF(10000, 219), COEFF(-3441, 224), COEFF(-7141, 224) },
-		{ COEFF(10000, 219), COEFF(17720, 224), COEFF(0, 224)     },
+	static const s16 bt601_full[3][3] = {
+		{256,   0,  359},
+		{256, -88, -183},
+		{256, 454,    0},
 	};
-	const s64 bt601_full[3][3] = {
-		{ COEFF(10000, 255), COEFF(0, 255),     COEFF(14020, 255) },
-		{ COEFF(10000, 255), COEFF(-3441, 255), COEFF(-7141, 255) },
-		{ COEFF(10000, 255), COEFF(17720, 255), COEFF(0, 255)     },
+	static const s16 bt601[3][3] = {
+		{298,    0,  409},
+		{298, -100, -208},
+		{298,  516,    0},
 	};
-	const s64 rec709[3][3] = {
-		{ COEFF(10000, 219), COEFF(0, 224),     COEFF(15748, 224) },
-		{ COEFF(10000, 219), COEFF(-1873, 224), COEFF(-4681, 224) },
-		{ COEFF(10000, 219), COEFF(18556, 224), COEFF(0, 224)     },
+	static const s16 rec709_full[3][3] = {
+		{256,   0,  408},
+		{256, -48, -120},
+		{256, 476,   0 },
 	};
-	const s64 rec709_full[3][3] = {
-		{ COEFF(10000, 255), COEFF(0, 255),     COEFF(15748, 255) },
-		{ COEFF(10000, 255), COEFF(-1873, 255), COEFF(-4681, 255) },
-		{ COEFF(10000, 255), COEFF(18556, 255), COEFF(0, 255)     },
+	static const s16 rec709[3][3] = {
+		{ 298,   0,  459},
+		{ 298, -55, -136},
+		{ 298, 541,    0},
 	};
-	const s64 bt2020[3][3] = {
-		{ COEFF(10000, 219), COEFF(0, 224),     COEFF(14746, 224) },
-		{ COEFF(10000, 219), COEFF(-1646, 224), COEFF(-5714, 224) },
-		{ COEFF(10000, 219), COEFF(18814, 224), COEFF(0, 224)     },
+	static const s16 bt2020_full[3][3] = {
+		{ 256,   0,  377},
+		{ 256, -42, -146},
+		{ 256, 482,    0},
 	};
-	const s64 bt2020_full[3][3] = {
-		{ COEFF(10000, 255), COEFF(0, 255),     COEFF(14746, 255) },
-		{ COEFF(10000, 255), COEFF(-1646, 255), COEFF(-5714, 255) },
-		{ COEFF(10000, 255), COEFF(18814, 255), COEFF(0, 255)     },
+	static const s16 bt2020[3][3] = {
+		{ 298,   0,  430},
+		{ 298, -48, -167},
+		{ 298, 548,    0},
 	};
 
-	int r = 0;
-	int g = 0;
-	int b = 0;
+	u8 r = 0;
+	u8 g = 0;
+	u8 b = 0;
 	bool full = range == DRM_COLOR_YCBCR_FULL_RANGE;
 	unsigned int y_offset = full ? 0 : 16;
 
@@ -216,9 +198,9 @@ static void yuv_u8_to_argb_u16(struct pixel_argb_u16 *argb_u16, struct pixel_yuv
 		break;
 	}
 
-	argb_u16->r = clamp(r, 0, 0xffff);
-	argb_u16->g = clamp(g, 0, 0xffff);
-	argb_u16->b = clamp(b, 0, 0xffff);
+	argb_u16->r = r * 257;
+	argb_u16->g = g * 257;
+	argb_u16->b = b * 257;
 }
 
 static void NV12_to_argb_u16(u8 **src_pixels, struct pixel_argb_u16 *out_pixel,
@@ -366,6 +348,109 @@ static void argb_u16_to_RGB565(u8 *dst_pixels, struct pixel_argb_u16 *in_pixel)
 	*pixels = cpu_to_le16(r << 11 | g << 5 | b);
 }
 
+static void rgb2ycbcr(const s16 m[3][3], int r, int g, int b, int y_offset, int *y, int *cb, int *cr)
+{
+	r = DIV_ROUND_CLOSEST(r, 257);
+	g = DIV_ROUND_CLOSEST(g, 257);
+	b = DIV_ROUND_CLOSEST(b, 257);
+
+	*y  = m[0][0] * r + m[0][1] * g + m[0][2] * b;
+	*cb = m[1][0] * r + m[1][1] * g + m[1][2] * b;
+	*cr = m[2][0] * r + m[2][1] * g + m[2][2] * b;
+
+	*y =   *y >> 8;
+	*cb = *cb >> 8;
+	*cr = *cr >> 8;
+	*y += y_offset;
+	*cb += 128;
+	*cr += 128;
+}
+
+static void argb_u16_to_yuv_u8(struct pixel_yuv_u8 *yuv_u8, const struct pixel_argb_u16 *argb_u16,
+			       enum drm_color_encoding encoding, enum drm_color_range range)
+{
+	static const s16 bt601_full[3][3] = {
+		{77 , 150, 29},
+		{-43, -85, 128},
+		{128, -107, -21},
+	};
+	static const s16 bt601[3][3] = {
+		{ 66, 129, 25},
+		{-38, -74, 112},
+		{112, -94, -18},
+	};
+	static const s16 rec709_full[3][3] = {
+		{54 , 183, 18},
+		{-29, -99, 128},
+		{128, -116, -12},
+	};
+	static const s16 rec709[3][3] = {
+		{ 47, 157, 16},
+		{-26, -87, 112},
+		{112, -102, -10},
+	};
+	static const s16 bt2020_full[3][3] = {
+		{ 67, 174, 15},
+		{-36, -92, 128},
+		{128, -118, -10},
+	};
+	static const s16 bt2020[3][3] = {
+		{ 58, 149, 13},
+		{-31, -81, 112},
+		{112, -103, -9},
+	};
+
+	int y = 0;
+	int u = 0;
+	int v = 0;
+	bool full = range == DRM_COLOR_YCBCR_FULL_RANGE;
+	unsigned int y_offset = full ? 0 : 16;
+
+	switch (encoding) {
+	case DRM_COLOR_YCBCR_BT601:
+		rgb2ycbcr(full ? bt601_full : bt601,
+			  argb_u16->r, argb_u16->g, argb_u16->b, y_offset, &y, &u, &v);
+		break;
+	case DRM_COLOR_YCBCR_BT709:
+		rgb2ycbcr(full ? rec709_full : rec709,
+			  argb_u16->r, argb_u16->g, argb_u16->b, y_offset, &y, &u, &v);
+		break;
+	case DRM_COLOR_YCBCR_BT2020:
+		rgb2ycbcr(full ? bt2020_full : bt2020,
+			  argb_u16->r, argb_u16->g, argb_u16->b, y_offset, &y, &u, &v);
+		break;
+	default:
+		pr_warn_once("Color encoding not supported\n");
+		break;
+	}
+
+	yuv_u8->y = clamp(y, 0, 0xff);
+	yuv_u8->u = clamp(u, 0, 0xff);
+	yuv_u8->v = clamp(v, 0, 0xff);
+}
+
+static void argb_u16_to_NV12(struct vkms_frame_info *frame_info,
+			     const struct line_buffer *src_buffer, int y)
+{
+	int x_dst = frame_info->dst.x1;
+	u8 *dst_y = packed_pixels_addr(frame_info, x_dst, y / 2, 0);
+	u8 *dst_uv = packed_pixels_addr(frame_info, x_dst, y / 2, 1);
+	struct pixel_yuv_u8 yuv_u8;
+	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
+	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
+			    src_buffer->n_pixels);
+
+	struct drm_plane_state *plane_state = container_of(&frame_info->fb, struct drm_plane, fb)->state;
+	for (size_t x = 0; x < x_limit; x++) {
+		argb_u16_to_yuv_u8(&yuv_u8, &in_pixels[x], plane_state->color_encoding,
+				   plane_state->color_range);
+		dst_y[x] = yuv_u8.y;
+		dst_uv[x / 2 + x / 2] = yuv_u8.u;
+		dst_uv[x / 2 + x / 2 + 1] = yuv_u8.v;
+	}
+}
+
+
 void vkms_writeback_row(struct vkms_writeback_job *wb,
 			const struct line_buffer *src_buffer, int y)
 {
@@ -377,41 +462,6 @@ void vkms_writeback_row(struct vkms_writeback_job *wb,
 
 	for (size_t x = 0; x < x_limit; x++, dst_pixels += frame_info->fb->format->cpp[0])
 		wb->pixel_write(dst_pixels, &in_pixels[x]);
-}
-
-/*
- * The conversion was based on the article below:
- * https://learn.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-rgb888-to-yuv-444
- */
-static void argb_u16_to_yuv_u8(struct pixel_yuv_u8 *yuv_u8, const struct pixel_argb_u16 *argb_u16)
-{
-	u8 r_u8 = DIV_ROUND_CLOSEST(argb_u16->r, 257);
-	u8 g_u8 = DIV_ROUND_CLOSEST(argb_u16->g, 257);
-	u8 b_u8 = DIV_ROUND_CLOSEST(argb_u16->b, 257);
-
-	yuv_u8->y = ((66 * r_u8  + 129 * g_u8 +  25 * b_u8 + 128) >> 8) +  16;
-	yuv_u8->u = ((-38 * r_u8 -  74 * g_u8 + 112 * b_u8 + 128) >> 8) + 128;
-	yuv_u8->v = ((112 * r_u8 -  94 * g_u8 -  18 * b_u8 + 128) >> 8) + 128;
-}
-
-
-static void argb_u16_to_NV12(struct vkms_frame_info *frame_info,
-			     const struct line_buffer *src_buffer, int y)
-{
-	int x_dst = frame_info->dst.x1;
-	u8 *dst_y = packed_pixels_addr(frame_info, x_dst, y, 0);
-	u8 *dst_uv = packed_pixels_addr(frame_info, x_dst, y / 2, 1);
-	struct pixel_yuv_u8 yuv_u8;
-	struct pixel_argb_u16 *in_pixels = src_buffer->pixels;
-	int x_limit = min_t(size_t, drm_rect_width(&frame_info->dst),
-			    src_buffer->n_pixels);
-
-	for (size_t x = 0; x < x_limit; x++) {
-		argb_u16_to_yuv_u8(&yuv_u8, &in_pixels[x]);
-		dst_y[x] = yuv_u8.y;
-		dst_uv[x / 2 + x / 2] = yuv_u8.u;
-		dst_uv[x / 2 + x / 2 + 1] = yuv_u8.v;
-	}
 }
 
 void *get_pixel_conversion_function(u32 format)
@@ -453,3 +503,7 @@ void *get_pixel_write_function(u32 format)
 		return NULL;
 	}
 }
+
+#ifdef CONFIG_DRM_VKMS_KUNIT_TESTS
+#include "tests/vkms_format_test.c"
+#endif
