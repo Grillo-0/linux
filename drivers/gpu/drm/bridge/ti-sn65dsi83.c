@@ -31,7 +31,7 @@
 #include <linux/i2c.h>
 #include <linux/media-bus-format.h>
 #include <linux/module.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/of_graph.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
@@ -748,7 +748,7 @@ static const struct of_device_id sn65dsi83_match_table[] = {
 MODULE_DEVICE_TABLE(of, sn65dsi83_match_table);
 
 static struct i2c_driver sn65dsi83_driver = {
-	.probe_new = sn65dsi83_probe,
+	.probe = sn65dsi83_probe,
 	.remove = sn65dsi83_remove,
 	.id_table = sn65dsi83_id,
 	.driver = {

@@ -71,9 +71,9 @@
 
 #include <video/sticore.h>
 
-/* REGION_BASE(fb_info, index) returns the virtual address for region <index> */
+/* REGION_BASE(fb_info, index) returns the physical address for region <index> */
 #define REGION_BASE(fb_info, index) \
-	F_EXTEND(fb_info->sti->glob_cfg->region_ptrs[index])
+	F_EXTEND(fb_info->sti->regions_phys[index])
 
 #define NGLEDEVDEPROM_CRT_REGION 1
 
@@ -1413,6 +1413,7 @@ out_err1:
 	iounmap(info->screen_base);
 out_err0:
 	kfree(fb);
+	sti->info = NULL;
 	return -ENXIO;
 }
 
