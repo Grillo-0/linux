@@ -440,3 +440,7 @@ void *get_pixel_write_function(u32 format)
 		return NULL;
 	}
 }
+
+#ifdef CONFIG_DRM_VKMS_KUNIT_TESTS
+#include "tests/vkms_format_test.c"
+#endif
